@@ -172,7 +172,7 @@ import MeasureController from '../controllers/MeasureController';
  *         name: measure_type
  *         schema:
  *           type: string
- *           enum: [WATER, GAS, water, gas]
+ *           enum: [WATER, GAS]
  *         required: false
  *         description: Tipo de medição para filtrar (case insensitive)
  *     responses:

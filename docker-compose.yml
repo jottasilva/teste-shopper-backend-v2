@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: measure-api
+    restart: always
+    ports:
+      - "80:3000"
+    environment:
+      - NODE_ENV=production
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - DATABASE_URL=mysql://root:root@db:3306/measure_db  # URL do MySQL
+    depends_on:
+      - db
+    volumes:
+      - ./uploads:/app/uploads
+    networks:
+      - measure-network
+
+  db:
+    image: mysql:8
+    container_name: measure-db
+    restart: always
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=measure_db
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - measure-network
+
+networks:
+  measure-network:
+    driver: bridge
+
+volumes:
+  mysql_data:

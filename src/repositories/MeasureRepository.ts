@@ -4,10 +4,16 @@ import { getMonthYear } from '../utils/validators';
 
 export class MeasureRepository {
   async create(measure: Measure): Promise<Measure> {
-    const existingMeasure = await this.findByCustomerCode(measure.customer_code);
+    const existingMeasure = await this.findByCustomerAndMonth(
+      measure.customer_code,
+      measure.measure_datetime,
+      measure.measure_type
+    );
+
     if (existingMeasure) {
-      throw new Error(`Já existe um registro para o consumer_code: ${measure.customer_code}`);
+      throw new Error(`Já existe um registro do tipo ${measure.measure_type} para este cliente no mês atual`);
     }
+
     const db = await getDatabase();
     const result = await db.run(
       `INSERT INTO measures (
@@ -27,40 +33,40 @@ export class MeasureRepository {
         measure.image_path
       ]
     );
-    
+
     return {
       ...measure,
       id: result.lastID
     };
   }
-  
+
   async findByCustomerCode(customerCode: string): Promise<Measure | undefined> {
     const db = await getDatabase();
-    
+
     return db.get<Measure>(
       'SELECT * FROM measures WHERE customer_code = ?',
       [customerCode]
     );
   }
-  
+
   async findByUUID(uuid: string): Promise<Measure | undefined> {
     const db = await getDatabase();
-    
+
     return db.get<Measure>(
       'SELECT * FROM measures WHERE measure_uuid = ?',
       [uuid]
     );
   }
-  
+
   async updateConfirmedValue(uuid: string, confirmedValue: number): Promise<void> {
     const db = await getDatabase();
-    
+
     await db.run(
       'UPDATE measures SET confirmed_value = ? WHERE measure_uuid = ?',
       [confirmedValue, uuid]
     );
   }
-  
+
   async findByCustomerAndMonth(
     customerCode: string, 
     measureDatetime: string, 
@@ -68,28 +74,28 @@ export class MeasureRepository {
   ): Promise<Measure | undefined> {
     const db = await getDatabase();
     const targetMonth = getMonthYear(measureDatetime);
-    
+
     const measures = await db.all<Measure[]>(
       'SELECT * FROM measures WHERE customer_code = ? AND measure_type = ?',
       [customerCode, measureType]
     );
-    
+
     return measures.find(measure => {
       const measureMonth = getMonthYear(measure.measure_datetime);
       return measureMonth === targetMonth;
     });
   }
-  
+
   async findByCustomer(customerCode: string, measureType?: MeasureType): Promise<Measure[]> {
     const db = await getDatabase();
-    
+
     if (measureType) {
       return db.all<Measure[]>(
         'SELECT * FROM measures WHERE customer_code = ? AND measure_type = ? ORDER BY measure_datetime DESC',
         [customerCode, measureType]
       );
     }
-    
+
     return db.all<Measure[]>(
       'SELECT * FROM measures WHERE customer_code = ? ORDER BY measure_datetime DESC',
       [customerCode]

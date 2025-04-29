@@ -1,4 +1,3 @@
-# teste-shopper-backend-v2
 # API de Medição de Água e Gás
 
 Este projeto implementa uma API REST para gerenciar leituras individualizadas de consumo de água e gás, utilizando IA (Google Gemini) para reconhecimento de valores em imagens de medidores.

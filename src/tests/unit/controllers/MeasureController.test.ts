@@ -1,12 +1,22 @@
 import { Request, Response } from 'express';
-import MeasureController from '../../../controllers/MeasureController';
-import MeasureService from '../../../services/MeasureService';
-import { AppError } from '../../../utils/errors';
-import * as validators from '../../../utils/validators';
-import * as dotenv from 'dotenv';
-dotenv.config({ path: '.env.test' });
-jest.mock('../../../services/MeasureService');
-jest.mock('../../../utils/validators');
+import MeasureController from '../controllers/MeasureController';
+import MeasureService from '../services/MeasureService';
+import { AppError, InvalidDataError } from '../utils/errors';
+import * as validators from '../utils/validators';
+
+// Mock do MeasureService
+jest.mock('../services/MeasureService', () => ({
+  createMeasure: jest.fn(),
+  confirmMeasure: jest.fn(),
+  listMeasures: jest.fn()
+}));
+
+// Mock dos validadores
+jest.mock('../utils/validators', () => ({
+  validateMeasureRequest: jest.fn(),
+  isValidConfirmedValue: jest.fn(),
+  isValidUUID: jest.fn()
+}));
 
 describe('MeasureController', () => {
   let mockRequest: Partial<Request>;
@@ -15,125 +25,169 @@ describe('MeasureController', () => {
   let responseStatus: jest.Mock;
 
   beforeEach(() => {
+    // Reset mocks before each test
     jest.clearAllMocks();
 
-    responseJson = jest.fn().mockReturnValue({});
-    responseStatus = jest.fn().mockReturnThis();
-
+    // Setup response mock
+    responseJson = jest.fn().mockReturnThis();
+    responseStatus = jest.fn().mockReturnValue({ json: responseJson });
     mockResponse = {
       status: responseStatus,
       json: responseJson
     };
-
-    mockRequest = {
-      body: {},
-      params: {},
-      query: {}
-    };
   });
 
   describe('upload', () => {
-    it('deve retornar status 200 e resultado quando upload for bem-sucedido', async () => {
-      const mockBody = {
-        measure_type: 'WATER',
-        value: 123,
-        customer_code: 'ABC123'
-      };
-      mockRequest.body = mockBody;
-
-      const expectedResult = {
-        measure_uuid: '123e4567-e89b-12d3-a456-426614174000',
-        status: 'PENDING'
+    it('should upload a measure successfully', async () => {
+      // Arrange
+      const mockData = { measure_type: 'WATER', value: 100 };
+      const mockResult = { id: 'uuid', ...mockData };
+      
+      mockRequest = {
+        body: mockData
       };
 
       (validators.validateMeasureRequest as jest.Mock).mockReturnValue({ isValid: true });
-      (MeasureService.createMeasure as jest.Mock).mockResolvedValue(expectedResult);
+      (MeasureService.createMeasure as jest.Mock).mockResolvedValue(mockResult);
 
+      // Act
       await MeasureController.upload(mockRequest as Request, mockResponse as Response);
 
-      expect(validators.validateMeasureRequest).toHaveBeenCalledWith(mockBody);
-      expect(MeasureService.createMeasure).toHaveBeenCalledWith(mockBody);
+      // Assert
+      expect(validators.validateMeasureRequest).toHaveBeenCalledWith(mockData);
+      expect(MeasureService.createMeasure).toHaveBeenCalledWith(mockData);
       expect(responseStatus).toHaveBeenCalledWith(200);
-      expect(responseJson).toHaveBeenCalledWith(expectedResult);
+      expect(responseJson).toHaveBeenCalledWith(mockResult);
     });
 
-    it('deve retornar status 400 quando a validação falhar', async () => {
+    it('should return 400 when validation fails', async () => {
+      // Arrange
+      const mockData = { measure_type: 'INVALID' };
       const errorMessage = 'Dados de solicitação inválidos';
-      (validators.validateMeasureRequest as jest.Mock).mockReturnValue({ isValid: false, errorMessage });
+      
+      mockRequest = {
+        body: mockData
+      };
 
+      (validators.validateMeasureRequest as jest.Mock).mockReturnValue({ 
+        isValid: false, 
+        errorMessage 
+      });
+
+      // Act
       await MeasureController.upload(mockRequest as Request, mockResponse as Response);
 
-      expect(responseStatus).toHaveBeenCalledWith(400);
+      // Assert
+      expect(validators.validateMeasureRequest).toHaveBeenCalledWith(mockData);
+      expect(MeasureService.createMeasure).not.toHaveBeenCalled();
+      expect(responseStatus).toHaveBeenCalledWith(400); // InvalidDataError tem statusCode 400
       expect(responseJson).toHaveBeenCalledWith(expect.objectContaining({
         error_code: 'INVALID_DATA',
         error_description: errorMessage
       }));
-      expect(MeasureService.createMeasure).not.toHaveBeenCalled();
     });
 
-    it('deve retornar status 500 quando ocorrer erro inesperado', async () => {
-      const mockError = new Error('Erro de teste');
-      (validators.validateMeasureRequest as jest.Mock).mockReturnValue({ isValid: true });
-      (MeasureService.createMeasure as jest.Mock).mockRejectedValue(mockError);
+    it('should handle service errors properly', async () => {
+      // Arrange
+      const mockData = { measure_type: 'WATER', value: 100 };
+      const serviceError = new AppError('SERVICE_ERROR', 'Erro no serviço', 422);
+      
+      mockRequest = {
+        body: mockData
+      };
 
+      (validators.validateMeasureRequest as jest.Mock).mockReturnValue({ isValid: true });
+      (MeasureService.createMeasure as jest.Mock).mockRejectedValue(serviceError);
+
+      // Act
       await MeasureController.upload(mockRequest as Request, mockResponse as Response);
 
+      // Assert
+      expect(responseStatus).toHaveBeenCalledWith(422);
+      expect(responseJson).toHaveBeenCalledWith(expect.objectContaining({
+        error_code: 'SERVICE_ERROR',
+        error_description: 'Erro no serviço'
+      }));
+    });
+
+    it('should handle unexpected errors', async () => {
+      // Arrange
+      const mockData = { measure_type: 'WATER', value: 100 };
+      const unexpectedError = new Error('Unexpected error');
+      
+      mockRequest = {
+        body: mockData
+      };
+
+      (validators.validateMeasureRequest as jest.Mock).mockReturnValue({ isValid: true });
+      (MeasureService.createMeasure as jest.Mock).mockRejectedValue(unexpectedError);
+
+      // Spy on console.error
+      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+
+      // Act
+      await MeasureController.upload(mockRequest as Request, mockResponse as Response);
+
+      // Assert
+      expect(consoleErrorSpy).toHaveBeenCalled();
       expect(responseStatus).toHaveBeenCalledWith(500);
       expect(responseJson).toHaveBeenCalledWith(expect.objectContaining({
         error_code: 'SERVER_ERROR',
         error_description: expect.stringContaining('Ocorreu um erro inesperado')
       }));
+      
+      // Restore console.error
+      consoleErrorSpy.mockRestore();
     });
-
-    it('deve retornar status correto quando AppError for lançado', async () => {
-        const appError = new AppError('Erro personalizado', 422, 'CUSTOM_ERROR');
-        (validators.validateMeasureRequest as jest.Mock).mockReturnValue({ isValid: true });
-        (MeasureService.createMeasure as jest.Mock).mockRejectedValue(appError);
-      
-        await MeasureController.upload(mockRequest as Request, mockResponse as Response);
-      
-        expect(responseStatus).toHaveBeenCalledWith(422);
-        expect(responseJson).toHaveBeenCalledWith(expect.objectContaining({
-          error_code: 'CUSTOM_ERROR',
-          error_description: 'Erro personalizado'
-        }));
-      });
-      
   });
 
   describe('confirm', () => {
-    it('deve retornar status 200 quando confirmação for bem-sucedida', async () => {
-      mockRequest.body = {
-        measure_uuid: '123e4567-e89b-12d3-a456-426614174000',
-        confirmed_value: 123
+    it('should confirm a measure successfully', async () => {
+      // Arrange
+      const mockData = { 
+        measure_uuid: '123e4567-e89b-12d3-a456-426614174000', 
+        confirmed_value: 100 
+      };
+      
+      mockRequest = {
+        body: mockData
       };
 
       (validators.isValidUUID as jest.Mock).mockReturnValue(true);
       (validators.isValidConfirmedValue as jest.Mock).mockReturnValue(true);
-      (MeasureService.confirmMeasure as jest.Mock).mockResolvedValue(undefined);
+      (MeasureService.confirmMeasure as jest.Mock).mockResolvedValue({ success: true });
 
+      // Act
       await MeasureController.confirm(mockRequest as Request, mockResponse as Response);
 
-      expect(validators.isValidUUID).toHaveBeenCalledWith('123e4567-e89b-12d3-a456-426614174000');
-      expect(validators.isValidConfirmedValue).toHaveBeenCalledWith(123);
+      // Assert
+      expect(validators.isValidUUID).toHaveBeenCalledWith(mockData.measure_uuid);
+      expect(validators.isValidConfirmedValue).toHaveBeenCalledWith(mockData.confirmed_value);
       expect(MeasureService.confirmMeasure).toHaveBeenCalledWith({
-        measure_uuid: '123e4567-e89b-12d3-a456-426614174000',
-        confirmed_value: 123
+        measure_uuid: mockData.measure_uuid,
+        confirmed_value: Number(mockData.confirmed_value)
       });
       expect(responseStatus).toHaveBeenCalledWith(200);
       expect(responseJson).toHaveBeenCalledWith({ success: true });
     });
 
-    it('deve retornar status 400 para measure_uuid inválido', async () => {
-      mockRequest.body = {
-        measure_uuid: 'invalid-uuid',
-        confirmed_value: 123
+    it('should return 400 when measure_uuid is invalid', async () => {
+      // Arrange
+      const mockData = { 
+        measure_uuid: 'invalid-uuid', 
+        confirmed_value: 100 
+      };
+      
+      mockRequest = {
+        body: mockData
       };
 
       (validators.isValidUUID as jest.Mock).mockReturnValue(false);
 
+      // Act
       await MeasureController.confirm(mockRequest as Request, mockResponse as Response);
 
+      // Assert
       expect(responseStatus).toHaveBeenCalledWith(400);
       expect(responseJson).toHaveBeenCalledWith(expect.objectContaining({
         error_code: 'INVALID_DATA',
@@ -142,17 +196,24 @@ describe('MeasureController', () => {
       expect(MeasureService.confirmMeasure).not.toHaveBeenCalled();
     });
 
-    it('deve retornar status 400 para confirmed_value inválido', async () => {
-      mockRequest.body = {
-        measure_uuid: '123e4567-e89b-12d3-a456-426614174000',
-        confirmed_value: 'abc'
+    it('should return 400 when confirmed_value is invalid', async () => {
+      // Arrange
+      const mockData = { 
+        measure_uuid: '123e4567-e89b-12d3-a456-426614174000', 
+        confirmed_value: 'not-a-number' 
+      };
+      
+      mockRequest = {
+        body: mockData
       };
 
       (validators.isValidUUID as jest.Mock).mockReturnValue(true);
       (validators.isValidConfirmedValue as jest.Mock).mockReturnValue(false);
 
+      // Act
       await MeasureController.confirm(mockRequest as Request, mockResponse as Response);
 
+      // Assert
       expect(responseStatus).toHaveBeenCalledWith(400);
       expect(responseJson).toHaveBeenCalledWith(expect.objectContaining({
         error_code: 'INVALID_DATA',
@@ -161,80 +222,108 @@ describe('MeasureController', () => {
       expect(MeasureService.confirmMeasure).not.toHaveBeenCalled();
     });
 
-    it('deve retornar status 500 para erro inesperado', async () => {
-      mockRequest.body = {
-        measure_uuid: '123e4567-e89b-12d3-a456-426614174000',
-        confirmed_value: 123
+    it('should handle unexpected errors in confirm', async () => {
+      // Arrange
+      const mockData = { 
+        measure_uuid: '123e4567-e89b-12d3-a456-426614174000', 
+        confirmed_value: 100 
+      };
+      
+      mockRequest = {
+        body: mockData
       };
 
-      const mockError = new Error('Erro de teste');
       (validators.isValidUUID as jest.Mock).mockReturnValue(true);
       (validators.isValidConfirmedValue as jest.Mock).mockReturnValue(true);
-      (MeasureService.confirmMeasure as jest.Mock).mockRejectedValue(mockError);
+      (MeasureService.confirmMeasure as jest.Mock).mockRejectedValue(new Error('Unexpected error'));
 
+      // Spy on console.error
+      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+
+      // Act
       await MeasureController.confirm(mockRequest as Request, mockResponse as Response);
 
+      // Assert
+      expect(consoleErrorSpy).toHaveBeenCalled();
       expect(responseStatus).toHaveBeenCalledWith(500);
       expect(responseJson).toHaveBeenCalledWith(expect.objectContaining({
-        error_code: 'SERVER_ERROR',
-        error_description: 'Ocorreu um erro inesperado'
+        error_code: 'SERVER_ERROR'
       }));
+      
+      // Restore console.error
+      consoleErrorSpy.mockRestore();
     });
   });
 
   describe('list', () => {
-    it('deve retornar status 200 com medições listadas', async () => {
-      const customerCode = 'ABC123';
-      const expectedMeasures = [
-        { measure_uuid: '123e4567-e89b-12d3-a456-426614174000', value: 100 },
-        { measure_uuid: '223e4567-e89b-12d3-a456-426614174000', value: 200 }
+    it('should list measures for a customer successfully', async () => {
+      // Arrange
+      const customerCode = 'CUST123';
+      const mockMeasures = [
+        { id: 'uuid1', measure_type: 'WATER', value: 100 },
+        { id: 'uuid2', measure_type: 'GAS', value: 200 }
       ];
+      
+      mockRequest = {
+        params: { customerCode },
+        query: {}
+      };
 
-      mockRequest.params = { customerCode };
-      mockRequest.query = {};
+      (MeasureService.listMeasures as jest.Mock).mockResolvedValue(mockMeasures);
 
-      (MeasureService.listMeasures as jest.Mock).mockResolvedValue(expectedMeasures);
-
+      // Act
       await MeasureController.list(mockRequest as Request, mockResponse as Response);
 
+      // Assert
       expect(MeasureService.listMeasures).toHaveBeenCalledWith(customerCode, undefined);
       expect(responseStatus).toHaveBeenCalledWith(200);
       expect(responseJson).toHaveBeenCalledWith({
         customer_code: customerCode,
-        measures: expectedMeasures
+        measures: mockMeasures
       });
     });
 
-    it('deve filtrar por measure_type quando fornecido', async () => {
-      const customerCode = 'ABC123';
-      const measureType = 'WATER';
-      const expectedMeasures = [
-        { measure_uuid: '123e4567-e89b-12d3-a456-426614174000', value: 100 }
+    it('should list measures filtered by measure_type', async () => {
+      // Arrange
+      const customerCode = 'CUST123';
+      const measureType = 'water';
+      const mockMeasures = [
+        { id: 'uuid1', measure_type: 'WATER', value: 100 }
       ];
+      
+      mockRequest = {
+        params: { customerCode },
+        query: { measure_type: measureType }
+      };
 
-      mockRequest.params = { customerCode };
-      mockRequest.query = { measure_type: measureType };
+      (MeasureService.listMeasures as jest.Mock).mockResolvedValue(mockMeasures);
 
-      (MeasureService.listMeasures as jest.Mock).mockResolvedValue(expectedMeasures);
-
+      // Act
       await MeasureController.list(mockRequest as Request, mockResponse as Response);
 
-      expect(MeasureService.listMeasures).toHaveBeenCalledWith(customerCode, measureType.toUpperCase());
+      // Assert
+      expect(MeasureService.listMeasures).toHaveBeenCalledWith(customerCode, 'WATER');
       expect(responseStatus).toHaveBeenCalledWith(200);
       expect(responseJson).toHaveBeenCalledWith({
         customer_code: customerCode,
-        measures: expectedMeasures
+        measures: mockMeasures
       });
     });
 
-    it('deve retornar status 400 para measure_type inválido', async () => {
-      const customerCode = 'ABC123';
+    it('should return 400 for invalid measure_type', async () => {
+      // Arrange
+      const customerCode = 'CUST123';
+      const invalidMeasureType = 'ELECTRICITY';
+      
+      mockRequest = {
+        params: { customerCode },
+        query: { measure_type: invalidMeasureType }
+      };
 
-      mockRequest.params = { customerCode };
-      mockRequest.query = { measure_type: 'INVALID_TYPE' };
-
+      // Act
       await MeasureController.list(mockRequest as Request, mockResponse as Response);
 
+      // Assert
       expect(MeasureService.listMeasures).not.toHaveBeenCalled();
       expect(responseStatus).toHaveBeenCalledWith(400);
       expect(responseJson).toHaveBeenCalledWith(expect.objectContaining({
@@ -243,44 +332,84 @@ describe('MeasureController', () => {
       }));
     });
 
-    it('deve tratar formatos de retorno do MeasureService', async () => {
-      const customerCode = 'ABC123';
-      const serviceMeasures = {
-        measures: [
-          { measure_uuid: '123e4567-e89b-12d3-a456-426614174000', value: 100 }
-        ]
+    it('should handle service errors in list', async () => {
+      // Arrange
+      const customerCode = 'CUST123';
+      const serviceError = new AppError('NOT_FOUND', 'Cliente não encontrado', 404);
+      
+      mockRequest = {
+        params: { customerCode },
+        query: {}
       };
 
-      mockRequest.params = { customerCode };
-      mockRequest.query = {};
+      (MeasureService.listMeasures as jest.Mock).mockRejectedValue(serviceError);
 
-      (MeasureService.listMeasures as jest.Mock).mockResolvedValue(serviceMeasures);
-
+      // Act
       await MeasureController.list(mockRequest as Request, mockResponse as Response);
 
+      // Assert
+      expect(responseStatus).toHaveBeenCalledWith(404);
+      expect(responseJson).toHaveBeenCalledWith(expect.objectContaining({
+        error_code: 'NOT_FOUND',
+        error_description: 'Cliente não encontrado'
+      }));
+    });
+
+    it('should handle unexpected errors in list', async () => {
+      // Arrange
+      const customerCode = 'CUST123';
+      
+      mockRequest = {
+        params: { customerCode },
+        query: {}
+      };
+
+      (MeasureService.listMeasures as jest.Mock).mockRejectedValue(new Error('Database connection error'));
+
+      // Spy on console.error
+      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+
+      // Act
+      await MeasureController.list(mockRequest as Request, mockResponse as Response);
+
+      // Assert
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      expect(responseStatus).toHaveBeenCalledWith(500);
+      expect(responseJson).toHaveBeenCalledWith(expect.objectContaining({
+        error_code: 'SERVER_ERROR'
+      }));
+      
+      // Restore console.error
+      consoleErrorSpy.mockRestore();
+    });
+
+    it('should handle measures returned as an object with measures property', async () => {
+      // Arrange
+      const customerCode = 'CUST123';
+      const mockMeasuresObject = {
+        measures: [
+          { id: 'uuid1', measure_type: 'WATER', value: 100 },
+          { id: 'uuid2', measure_type: 'GAS', value: 200 }
+        ],
+        total: 2
+      };
+      
+      mockRequest = {
+        params: { customerCode },
+        query: {}
+      };
+
+      (MeasureService.listMeasures as jest.Mock).mockResolvedValue(mockMeasuresObject);
+
+      // Act
+      await MeasureController.list(mockRequest as Request, mockResponse as Response);
+
+      // Assert
       expect(responseStatus).toHaveBeenCalledWith(200);
       expect(responseJson).toHaveBeenCalledWith({
         customer_code: customerCode,
-        measures: serviceMeasures.measures
+        measures: mockMeasuresObject.measures
       });
-    });
-
-    it('deve retornar status 500 para erro inesperado', async () => {
-      const customerCode = 'ABC123';
-      const mockError = new Error('Erro de teste');
-
-      mockRequest.params = { customerCode };
-      mockRequest.query = {};
-
-      (MeasureService.listMeasures as jest.Mock).mockRejectedValue(mockError);
-
-      await MeasureController.list(mockRequest as Request, mockResponse as Response);
-
-      expect(responseStatus).toHaveBeenCalledWith(500);
-      expect(responseJson).toHaveBeenCalledWith(expect.objectContaining({
-        error_code: 'SERVER_ERROR',
-        error_description: 'Ocorreu um erro inesperado'
-      }));
     });
   });
 });

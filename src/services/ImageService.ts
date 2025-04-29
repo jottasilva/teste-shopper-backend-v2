@@ -28,7 +28,7 @@ export class ImageService {
   
   getImageUrl(filePath: string): string {
     const fileName = path.basename(filePath);
-    return `/images/${fileName}`;
+    return `http://localhost/images/${fileName}`;
   }
 }
 
